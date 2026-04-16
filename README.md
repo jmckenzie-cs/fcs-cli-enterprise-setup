@@ -1,16 +1,10 @@
-# FCS CLI at Scale — 100+ Developer Teams
+# FCS CLI — Secrets Manager Distribution and Programmatic Download
 
-## Overview
+## 1. Centralizing API Client Credentials with a Secrets Manager
 
-The core problem at scale: you don't want 100 devs each managing their own API keys, and you don't want to create 100 separate API clients. The solution is **centralized credentials distributed via your secrets manager or CI/CD platform**, not per-developer keys.
+Create **one shared API client** in the Falcon console and store its credentials in your secrets manager — not in individual developer environments or config files.
 
----
-
-## 1. API Client Strategy
-
-Create **ONE shared API client** (or a small number by team/environment), not one per developer.
-
-Required scopes for image assessment:
+Required scopes:
 
 | Scope | Permission |
 |---|---|
@@ -20,30 +14,11 @@ Required scopes for image assessment:
 
 In the Falcon console: **Support and resources > Resources and tools > API clients and keys > Add new API client**
 
-> **Do not give individual developers the client secret directly.** Store it centrally.
+> **Do not give individual developers the client secret directly.** Store it centrally and inject it at runtime.
 
----
-
-## 2. Credential Distribution Patterns
-
-### Option A — CI/CD Platform Secrets (recommended for most teams)
-
-Store credentials as org-level or repo-level secrets in your CI/CD platform. Developers never see the secret — the pipeline injects it at runtime.
-
-```yaml
-# GitHub Actions example
-env:
-  FALCON_CLIENT_ID: ${{ secrets.FALCON_CLIENT_ID }}
-  FALCON_CLIENT_SECRET: ${{ secrets.FALCON_CLIENT_SECRET }}
-  FALCON_REGION: us-1
-```
-
-### Option B — Secrets Manager (AWS, Vault, Azure Key Vault, etc.)
-
-Store the client ID/secret centrally and have your pipeline retrieve it at build time:
+### AWS Secrets Manager
 
 ```shell
-# Example: fetch from AWS Secrets Manager in pipeline
 export FALCON_CLIENT_ID=$(aws secretsmanager get-secret-value \
   --secret-id crowdstrike/fcs-cli \
   --query SecretString --output text | jq -r '.client_id')
@@ -53,25 +28,32 @@ export FALCON_CLIENT_SECRET=$(aws secretsmanager get-secret-value \
   --query SecretString --output text | jq -r '.client_secret')
 ```
 
-### Option C — Environment Variables
-
-The FCS CLI accepts credentials via env vars — no config file needed per developer:
+### HashiCorp Vault
 
 ```shell
-export FCS_CLIENT_ID="<YOUR_CLIENT_ID>"
-export FCS_CLIENT_SECRET="<YOUR_CLIENT_SECRET>"
-export FALCON_API_URL="https://api.crowdstrike.com"  # adjust for your region
+export FALCON_CLIENT_ID=$(vault kv get -field=client_id secret/crowdstrike/fcs-cli)
+export FALCON_CLIENT_SECRET=$(vault kv get -field=client_secret secret/crowdstrike/fcs-cli)
 ```
 
-This avoids per-developer configuration files (`~/.crowdstrike/fcs.json`).
+### Azure Key Vault
+
+```shell
+export FALCON_CLIENT_ID=$(az keyvault secret show \
+  --vault-name <YOUR_VAULT> --name fcs-client-id --query value -o tsv)
+
+export FALCON_CLIENT_SECRET=$(az keyvault secret show \
+  --vault-name <YOUR_VAULT> --name fcs-client-secret --query value -o tsv)
+```
+
+Once exported, the FCS CLI picks them up via environment variables — no per-developer config files needed.
 
 ---
 
-## 3. Programmatic FCS CLI Download in Pipelines
+## 2. Programmatic FCS CLI Download
 
-Don't require devs to manually download the binary. Auto-fetch the latest version at pipeline start.
+Rather than requiring developers to manually install the binary, fetch it automatically as part of your pipeline or local setup script.
 
-**Step 1 — Get an OAuth token:**
+### Step 1 — Get an OAuth token
 
 ```shell
 FALCON_ACCESS_TOKEN=$(curl --request POST \
@@ -81,11 +63,13 @@ FALCON_ACCESS_TOKEN=$(curl --request POST \
   --url "${FALCON_API_URL}/oauth2/token" | jq -r '.access_token')
 ```
 
-**Step 2 — Enumerate versions and download:**
+> Tokens are short-lived — generate a fresh one per run. Do not cache or distribute them.
+
+### Step 2 — Enumerate available versions and download
 
 ```shell
-FCS_TARGET_OS=linux
-FCS_TARGET_ARCH=amd64
+FCS_TARGET_OS=linux    # darwin | linux | windows
+FCS_TARGET_ARCH=amd64  # amd64 | arm64
 
 FCS_DOWNLOAD_URL=$(curl --get \
   --header "accept: application/json" \
@@ -98,144 +82,7 @@ curl --location --output fcs.tar.gz "$FCS_DOWNLOAD_URL"
 tar -xvzf fcs.tar.gz && chmod u+x fcs
 ```
 
-> Tokens are short-lived — generate fresh per pipeline run. Do not cache or distribute them.
-
-### Supported Platforms
-
-| Operating System | Architecture | Platform Name | File Name |
-|---|---|---|---|
-| macOS | Apple Silicon | darwin-arm64 | fcs_2.2.0_Darwin_arm64.tar.gz |
-| macOS | Intel-based | darwin-amd64 | fcs_2.2.0_Darwin_x86_64.tar.gz |
-| Linux | aarch64 | linux-arm64 | fcs_2.2.0_Linux_arm64.tar.gz |
-| Linux | x86_64 | linux-amd64 | fcs_2.2.0_Linux_x86_64.tar.gz |
-| Windows | aarch64 | windows-arm64 | fcs_2.2.0_Windows_arm64.zip |
-| Windows | x86_64 | windows-amd64 | fcs_2.2.0_Windows_x86_64.zip |
-
----
-
-## 4. Container-Based Approach (Best for Scale)
-
-For maximum consistency across 100 teams, run FCS CLI **as a container** rather than a binary. No install or update management per developer.
-
-> **Note:** The FCS CLI container image is only available for `linux/arm64`. Authentication to the CrowdStrike registry is required before pulling — you cannot `docker pull` anonymously.
-
-### Step 1 — Authenticate to the CrowdStrike registry
-
-You only need to do this once per pipeline environment to obtain a registry password (the password can be reused across runs).
-
-```shell
-# Get an OAuth token
-FALCON_ACCESS_TOKEN=$(curl -s --request POST \
-  --header "Content-Type: application/x-www-form-urlencoded" \
-  --data-urlencode "client_id=${FALCON_CLIENT_ID}" \
-  --data-urlencode "client_secret=${FALCON_CLIENT_SECRET}" \
-  --url "${FALCON_API_URL}/oauth2/token" | jq -r '.access_token')
-
-# Exchange it for a registry password
-CS_PASSWORD=$(curl -s --request GET \
-  --header "Authorization: Bearer ${FALCON_ACCESS_TOKEN}" \
-  --url "${FALCON_API_URL}/iac/entities/image-registry-credentials/v1" \
-  | jq -r '.resources.resources.token')
-
-# Log in — username is your CID prefixed with "fh-", checksum removed
-# e.g. CID 0123456789ABCDEFGHIJKLMNOPQRSTUV-WX → fh-0123456789ABCDEFGHIJKLMNOPQRSTUV
-echo "$CS_PASSWORD" | docker login "$CS_REGISTRY" --username "fh-<YOUR_CID>" --password-stdin
-```
-
-### Step 2 — Pull and run
-
-```shell
-export CS_REGISTRY=registry.crowdstrike.com          # see region table below
-export CS_IMAGE=${CS_REGISTRY}/fcs/us-1/release/cs-fcs
-export CS_IMAGE_TAG=2.2.0
-
-docker pull ${CS_IMAGE}:${CS_IMAGE_TAG}
-
-docker run --rm \
-  -v /var/run/docker.sock:/var/run/docker.sock \
-  ${CS_IMAGE}:${CS_IMAGE_TAG} scan image myapp:latest \
-  --client-id $FALCON_CLIENT_ID \
-  --client-secret $FALCON_CLIENT_SECRET \
-  --falcon-region us-1
-```
-
-You control the version tag centrally — no per-developer installs needed.
-
-### Scan for upload only (faster, no local output)
-
-```shell
-docker run --rm \
-  -v /var/run/docker.sock:/var/run/docker.sock \
-  ${CS_IMAGE}:${CS_IMAGE_TAG} scan image myapp:latest \
-  --scan-only \
-  --upload \
-  --client-id $FALCON_CLIENT_ID \
-  --client-secret $FALCON_CLIENT_SECRET \
-  --falcon-region us-1
-```
-
-### CrowdStrike Registry URLs by Region
-
-| CrowdStrike Cloud | Registry URL | Region Code |
-|---|---|---|
-| US-1 | registry.crowdstrike.com | us-1 |
-| US-2 | registry.crowdstrike.com | us-2 |
-| EU-1 | registry.crowdstrike.com | eu-1 |
-| US-GOV-1 | registry.laggar.gcw.crowdstrike.com | gov-1 |
-| US-GOV-2 | registry.us-gov-2.crowdstrike.mil | gov-2 |
-
----
-
-## 5. Multi-Team Configuration Profiles
-
-If you need different API keys per environment (dev vs prod) or per business unit, use FCS CLI profiles:
-
-```shell
-# Create named profiles
-fcs configure --profile team-a
-fcs configure --profile team-b
-
-# Use a specific profile at scan time
-fcs scan image myapp:latest --profile team-a
-```
-
-This lets you map teams to separate API clients with appropriate scopes, without managing individual keys.
-
----
-
-## 6. Pipeline Integration — Exit Code Handling
-
-Build go/no-go gates using FCS CLI exit codes:
-
-| Exit Code | Meaning | Recommended Action |
-|---|---|---|
-| `0` | Passed policy | Allow deployment |
-| `1` | Failed policy — block | Fail the build |
-| `2` | Failed policy — alert | Send notification, optionally fail |
-| `201` | Invalid input | Check scan command syntax |
-| `202` | Authentication error | Check client ID, secret, and region |
-| `203` | Scan processing error | Investigate scan logs |
-| `204` | Error downloading report | Check connectivity |
-| `205` | Error preparing report | Check scan output |
-| `206` | Error generating SBOM | Check image format |
-| `207` | Scan errors detected | Review report file |
-
-```shell
-fcs scan image myapp:latest
-EXIT_CODE=$?
-
-if [ $EXIT_CODE -eq 1 ]; then
-  echo "Image blocked by policy — failing build"
-  exit 1
-elif [ $EXIT_CODE -eq 2 ]; then
-  echo "Image flagged — alert sent to Falcon console"
-  # optionally fail or warn
-fi
-```
-
----
-
-## 7. API Base URLs by Region
+### API Base URLs by Region
 
 | Cloud | API Base URL |
 |---|---|
@@ -245,45 +92,13 @@ fi
 | US-GOV-1 | https://api.laggar.gcw.crowdstrike.com |
 | US-GOV-2 | https://api.us-gov-2.crowdstrike.mil |
 
-**Upload servers (firewall allowlist):**
+### Supported Platforms
 
-| Region | Upload Server |
-|---|---|
-| US-1 | https://container-upload.us-1.crowdstrike.com |
-| US-2 | https://container-upload.us-2.crowdstrike.com |
-| EU-1 | https://container-upload.eu-1.crowdstrike.com |
-| US-GOV-1 | https://container-upload.laggar.gcw.crowdstrike.com |
-| US-GOV-2 | https://container-upload.us-gov-2.crowdstrike.mil |
-
----
-
-## Recommended Architecture at Scale
-
-```
-Secrets Manager / CI Platform Secrets
-         |
-         v
-  1 Shared API Client (scoped to image assessment)
-         |
-         v
-  Shared Pipeline Template (used across all teams)
-  ├── Auto-downloads FCS CLI binary or pulls container image
-  ├── Injects credentials via environment variables
-  ├── Runs fcs scan image <IMAGE>
-  ├── Checks exit code for go/no-go gate
-  └── Uploads results to Falcon console (--upload flag)
-         |
-         v
-  Falcon Console — centralized view of all scan results
-```
-
-Developers never handle credentials directly. They trigger the pipeline; security runs automatically.
-
----
-
-## GitHub Action (Official)
-
-CrowdStrike provides an official GitHub Action in the GitHub Marketplace:
-`CrowdStrike/fcs-action`
-
-Use this as a reference implementation for other CI/CD platforms (GitLab, Jenkins, Bitbucket Pipelines, Azure DevOps, etc.).
+| Operating System | Architecture | Platform Name |
+|---|---|---|
+| macOS | Apple Silicon | darwin-arm64 |
+| macOS | Intel-based | darwin-amd64 |
+| Linux | aarch64 | linux-arm64 |
+| Linux | x86_64 | linux-amd64 |
+| Windows | aarch64 | windows-arm64 |
+| Windows | x86_64 | windows-amd64 |
