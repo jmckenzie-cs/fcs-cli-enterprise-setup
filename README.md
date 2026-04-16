@@ -73,7 +73,7 @@ FALCON_ACCESS_TOKEN=$(curl --request POST \
 ### Step 2 — Enumerate available versions and download
 
 ```shell
-FCS_TARGET_OS=linux    # darwin | linux | windows
+FCS_TARGET_OS=linux    # darwin (macOS) | linux | windows
 FCS_TARGET_ARCH=amd64  # amd64 | arm64
 
 FCS_DOWNLOAD_URL=$(curl --get \
