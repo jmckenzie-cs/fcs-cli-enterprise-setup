@@ -1,0 +1,20 @@
+# FCS CLI binary and archives
+fcs
+fcs.tar.gz
+fcs.zip
+fcs_*
+
+# macOS
+.DS_Store
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Secrets — never commit these
+.env
+.env.*
+*.secret
+credentials.json
