@@ -20,10 +20,12 @@ In the Falcon console: **Support and resources > Resources and tools > API clien
 
 ```shell
 export FALCON_CLIENT_ID=$(aws secretsmanager get-secret-value \
+  --region <YOUR_AWS_REGION> \
   --secret-id crowdstrike/fcs-cli \
   --query SecretString --output text | jq -r '.client_id')
 
 export FALCON_CLIENT_SECRET=$(aws secretsmanager get-secret-value \
+  --region <YOUR_AWS_REGION> \
   --secret-id crowdstrike/fcs-cli \
   --query SecretString --output text | jq -r '.client_secret')
 ```
