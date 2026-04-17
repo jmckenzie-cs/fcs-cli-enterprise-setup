@@ -1,0 +1,67 @@
+name: FCS Image Scan
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  fcs-scan:
+    runs-on: ubuntu-latest
+
+    permissions:
+      id-token: write   # required for OIDC token
+      contents: read
+
+    env:
+      FALCON_REGION: us-1
+      FCS_VERSION: 2.2.0
+      AWS_REGION: us-east-1
+      LAMBDA_FUNCTION: crowdstrike-fcs-token-vend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.FCS_SCAN_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+        # FCS_SCAN_ROLE_ARN is set as a repo/org variable (not a secret).
+        # The role only has lambda:InvokeFunction on the token vend function.
+
+      - name: Get FCS token
+        id: fcs-token
+        run: |
+          RESPONSE=$(aws lambda invoke \
+            --function-name "$LAMBDA_FUNCTION" \
+            --payload '{}' \
+            --output text \
+            --query Payload \
+            /dev/stdout)
+          TOKEN=$(echo "$RESPONSE" | jq -r '.body | fromjson | .token')
+          echo "::add-mask::$TOKEN"
+          echo "token=$TOKEN" >> "$GITHUB_OUTPUT"
+
+      - name: Download FCS CLI
+        run: |
+          FCS_DOWNLOAD_URL=$(curl --silent --get \
+            --header "accept: application/json" \
+            --header "Authorization: Bearer ${{ steps.fcs-token.outputs.token }}" \
+            --url "https://api.crowdstrike.com/csdownloads/combined/files-download/v2" \
+            --data-urlencode "filter=category:\"fcs\"+os:\"linux\"+arch:\"amd64\"" \
+            | jq -r '.resources[0].download_info.download_url')
+
+          curl --silent --location --output fcs.tar.gz "$FCS_DOWNLOAD_URL"
+          tar -xzf fcs.tar.gz && chmod u+x fcs
+          sudo mv fcs /usr/local/bin/fcs
+
+      - name: Build image
+        run: docker build -t myapp:${{ github.sha }} .
+
+      - name: Scan image
+        run: |
+          fcs scan image myapp:${{ github.sha }} \
+            --falcon-token ${{ steps.fcs-token.outputs.token }} \
+            --falcon-region ${{ env.FALCON_REGION }} \
+            --upload
