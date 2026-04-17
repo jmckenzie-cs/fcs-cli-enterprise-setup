@@ -1,5 +1,14 @@
 # FCS CLI — Secrets Manager Distribution and Programmatic Download
 
+## Contents
+
+| | |
+|---|---|
+| This file | Centralizing credentials in a secrets manager and programmatic FCS CLI download |
+| [`token-vending-lambda/`](token-vending-lambda/README.md) | Token Vending Machine — teams get a short-lived bearer token without ever seeing the client secret |
+
+---
+
 ## 1. Centralizing API Client Credentials with a Secrets Manager
 
 Create **one shared API client** in the Falcon console and store its credentials in your secrets manager — not in individual developer environments or config files.
