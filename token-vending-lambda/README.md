@@ -53,13 +53,16 @@ token-vending-lambda/
 ├── .github/
 │   └── workflows/
 │       └── fcs-scan.yml                # Reference GitHub Actions workflow
-└── scripts/
-    └── fcs-scan-local.sh               # Local developer wrapper
+├── scripts/
+│   └── fcs-scan-local.sh               # Local developer wrapper
+└── TESTING.md                          # Step-by-step deployment and validation guide
 ```
 
 ---
 
 ## Deployment
+
+For a complete step-by-step walkthrough covering IAM setup, Secrets Manager, Lambda packaging and deployment, and end-to-end validation, see [TESTING.md](TESTING.md).
 
 ### 1. Store credentials in Secrets Manager
 
