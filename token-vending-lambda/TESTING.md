@@ -15,11 +15,12 @@ Step-by-step instructions for deploying and validating the token vending Lambda 
 
 ## Step 1 — Get your AWS account ID
 
-```shell
-aws sts get-caller-identity --query Account --output text
-```
+Capture it into a variable so you can use it directly in later commands without manual substitution:
 
-Save this value — you'll substitute it for `ACCOUNT_ID` in the steps below.
+```shell
+ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+echo $ACCOUNT_ID
+```
 
 ---
 
@@ -53,10 +54,10 @@ aws iam create-role \
   --region us-east-1
 ```
 
-**Attach the execution policy from the repo** (replace `ACCOUNT_ID`):
+**Attach the execution policy from the repo:**
 
 ```shell
-sed 's/ACCOUNT_ID/YOUR_ACCOUNT_ID/g' \
+sed "s/ACCOUNT_ID/$ACCOUNT_ID/g" \
   token-vending-lambda/iam/execution-role-policy.json > /tmp/execution-role-policy.json
 
 aws iam put-role-policy \
@@ -77,10 +78,10 @@ This user represents a developer or pipeline that can invoke the Lambda but has 
 aws iam create-user --user-name fcs-token-vend-tester
 ```
 
-**Attach the caller policy** (replace `ACCOUNT_ID`):
+**Attach the caller policy:**
 
 ```shell
-sed 's/ACCOUNT_ID/YOUR_ACCOUNT_ID/g' \
+sed "s/ACCOUNT_ID/$ACCOUNT_ID/g" \
   token-vending-lambda/iam/caller-role-policy.json > /tmp/caller-policy.json
 
 aws iam put-user-policy \
@@ -143,14 +144,12 @@ zip handler.zip handler.py
 
 ## Step 6 — Deploy the Lambda
 
-Replace `ACCOUNT_ID`:
-
 ```shell
 aws lambda create-function \
   --function-name crowdstrike-fcs-token-vend \
   --runtime python3.12 \
   --handler handler.handler \
-  --role arn:aws:iam::ACCOUNT_ID:role/crowdstrike-fcs-token-vend-role \
+  --role arn:aws:iam::${ACCOUNT_ID}:role/crowdstrike-fcs-token-vend-role \
   --zip-file fileb://handler.zip \
   --environment "Variables={SECRET_ID=crowdstrike/fcs-cli,FALCON_API_URL=https://api.crowdstrike.com}" \
   --region us-east-1
